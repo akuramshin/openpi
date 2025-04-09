@@ -49,8 +49,17 @@ class WebsocketPolicyServer:
         while True:
             try:
                 obs = msgpack_numpy.unpackb(await websocket.recv())
-                action = self._policy.infer(obs)
-                await websocket.send(packer.pack(action))
+
+                # Handle both single observations and batches
+                if isinstance(obs, list):
+                    out = self._policy.infer_batch(obs)
+                elif isinstance(obs, dict) and 'k' in obs and 'temperature' in obs:
+                    out = self._policy.infer_k_action_chunks_and_logits(obs['obs'], obs['k'], obs['temperature'])
+                else:
+                    out = self._policy.infer(obs)
+
+                # out = self._policy.infer(obs)
+                await websocket.send(packer.pack(out))
             except websockets.ConnectionClosed:
                 logging.info(f"Connection from {websocket.remote_address} closed")
                 break

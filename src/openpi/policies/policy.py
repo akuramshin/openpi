@@ -31,11 +31,18 @@ class Policy(BasePolicy):
         metadata: dict[str, Any] | None = None,
     ):
         self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+        self._sample_k_action_chunks_and_logits = model.sample_k_action_chunks_and_logits
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
         self._rng = rng or jax.random.key(0)
         self._sample_kwargs = sample_kwargs or {}
         self._metadata = metadata or {}
+
+        self.build_probability_calculator()
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return self._metadata
 
     @override
     def infer(self, obs: dict) -> dict:  # type: ignore[misc]
@@ -46,19 +53,176 @@ class Policy(BasePolicy):
         inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
 
         self._rng, sample_rng = jax.random.split(self._rng)
+        tokens = self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs)
         outputs = {
             "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs),
+            "actions": tokens,
         }
 
         # Unbatch and convert to np.ndarray.
         outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
-        return self._output_transform(outputs)
+        return self._output_transform(outputs) #, {'actions': tokens, 'state': inputs["state"]}
+    
+    def infer_k_action_chunks_and_logprobs(
+            self, 
+            observations: list[dict], 
+            k: int = 1, 
+            temperature: float = 0.0, 
+        ):
+        """
+        Run inference on a batch of observations.
+        For each observation, sample k action chunks and the sequences of logits for each sampled action chunk.
+        """
+        # 1. Transform each observation individually (like in training)
+        transformed_inputs = []
+        for obs in observations:
+            # Make a copy and transform (same as in single infer)
+            inputs = jax.tree.map(lambda x: x, obs)
+            inputs = self._input_transform(inputs)
+            transformed_inputs.append(inputs)
+            
+        # 2. Stack into batch (like the collate_fn in training)
+        batched_inputs = jax.tree.map(
+            lambda *xs: jnp.stack([jnp.asarray(x) for x in xs]), 
+            *transformed_inputs
+        )
 
-    @property
-    def metadata(self) -> dict[str, Any]:
-        return self._metadata
+        # 3. Run model inference on batch
+        self._rng, rng = jax.random.split(self._rng)
+        sample_rngs = jax.random.split(rng, k)
+        tokens, logits = self._sample_k_action_chunks_and_logits(
+            sample_rngs, 
+            _model.Observation.from_dict(batched_inputs), 
+            temperature=temperature,
+        )
+        
+        # 4. Split batch back into individual examples to apply FAST decoding
+        batch_outputs = []
+        individual_outputs = []
+        batch_size = len(observations)
+        for i in range(batch_size):
+            for _k in range(k):
+                curr_output = {
+                    "state": batched_inputs["state"][i],
+                    "actions": tokens[i, _k],
+                }
+                # Transform output (same as in single infer)
+                single_output = self._output_transform(curr_output)['actions']
+                individual_outputs.append(single_output)
+            batch_outputs.append(individual_outputs)
+            
+        # 5. Get the logprobs for the generated tokens
+        logprobs = self.get_probs_from_action_chunks_and_logits(tokens, logits, temperature)
 
+        batch_outputs = {
+            'actions' : np.array(batch_outputs),
+            'tokens': np.array(tokens, dtype=np.int32),
+            # 'logits': np.array(logits, dtype=np.float32),
+            'logprobs': np.array(logprobs, dtype=np.float32),
+        }
+
+        return batch_outputs
+    
+    def get_probs_from_action_chunks_and_logits(
+            self, 
+            tokens: jnp.ndarray,
+            logits: jnp.ndarray,
+            temperature: float = 1.0
+        ):
+        """
+        Get the probabilities of the action chunks from the corresponding sequences of logits.
+
+        Args:
+            tokens: jnp.ndarray, shape (batch_size, k, max_decoding_steps)
+            logits: jnp.ndarray, shape (batch_size, k, max_decoding_steps, vocab_size)
+            temperature: float, temperature for the softmax
+
+        Returns:
+            jnp.ndarray, shape (batch_size, k, max_decoding_steps)
+        """
+        batch_size = tokens.shape[0]
+        num_samples = tokens.shape[1]
+        
+        if temperature == 0.0:
+            # Return probabilities of 1 for all selected tokens
+            chunk_logprobs = jnp.ones((batch_size, num_samples))
+        else:
+            logits = logits / temperature
+            logprobs = jax.nn.log_softmax(logits, axis=-1)
+    
+            chunk_logprobs = self._compute_logprobs_for_token_chunks(tokens, logprobs)
+
+        return chunk_logprobs
+
+    def infer_batch(self, observations: list[dict]) -> list[dict]:
+        """
+        Run inference on a batch of observations.
+        
+        Args:
+            observations: List of observation dictionaries
+            
+        Returns:
+            List of action dictionaries
+        """
+        # 1. Transform each observation individually (like in training)
+        transformed_inputs = []
+        for obs in observations:
+            # Make a copy and transform (same as in single infer)
+            inputs = jax.tree.map(lambda x: x, obs)
+            inputs = self._input_transform(inputs)
+            transformed_inputs.append(inputs)
+            
+        # 2. Stack into batch (like the collate_fn in training)
+        batched_inputs = jax.tree.map(
+            lambda *xs: jnp.stack([jnp.asarray(x) for x in xs]), 
+            *transformed_inputs
+        )
+        
+        # 3. Run model inference on batch
+        self._rng, sample_rng = jax.random.split(self._rng)
+        outputs = {
+            "state": batched_inputs["state"],
+            "actions": self._sample_actions(
+                sample_rng, 
+                _model.Observation.from_dict(batched_inputs), 
+                **self._sample_kwargs
+            ),
+        }
+        
+        # 4. Split batch back into individual examples
+        individual_outputs = []
+        batch_size = len(observations)
+        for i in range(batch_size):
+            single_output = jax.tree.map(
+                lambda x: np.asarray(x[i]),
+                outputs
+            )
+            # Transform output (same as in single infer)
+            single_output = self._output_transform(single_output)
+            individual_outputs.append(single_output)
+            
+        return individual_outputs
+
+    def build_probability_calculator(self):
+        def get_logprobs_for_action_chunk(token_chunk, logprobs):
+            """
+            Get the log probability for a single action chunk.
+
+            Args:
+                action_chunk: jnp.ndarray, shape (max_decoding_steps,)
+                logprobs: jnp.ndarray, shape (max_decoding_steps, vocab_size)
+            Returns:
+                float, log probability of the action chunk
+            """
+            # Get the indeces where the action chunk is non-zero
+            indices = jnp.where(token_chunk != 0, size=token_chunk.shape[0])[0]
+            vals = logprobs[indices, token_chunk[indices]]
+            return jnp.sum(vals)
+
+        vmapped_over_batch = jax.vmap(get_logprobs_for_action_chunk, in_axes=(0, 0))
+        vmapped_over_samples = jax.vmap(vmapped_over_batch, in_axes=(0, 0))
+        compute_logprobs_for_token_chunk = jax.jit(vmapped_over_samples)
+        self._compute_logprobs_for_token_chunks = compute_logprobs_for_token_chunk
 
 class PolicyRecorder(_base_policy.BasePolicy):
     """Records the policy's behavior to disk."""
