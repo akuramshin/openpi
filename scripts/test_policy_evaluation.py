@@ -17,12 +17,12 @@ with open('policy_input.pkl', 'rb') as f:
 
 # Run once to jit compile
 # single_outputs = policy.infer(policy_input)
-batch_outputs = policy.infer_k_action_chunks_and_logprobs([policy_input, policy_input], k=5, temperature=0.0)
+batch_outputs = policy.infer_k_action_chunks_and_logprobs([policy_input], k=5, temperature=1.0)
 
 timings = []
 for i in range(10):
     start_time = time.time()
-    batch_outputs = policy.infer_k_action_chunks_and_logprobs([policy_input, policy_input], k=5, temperature=0.0)
+    batch_outputs = policy.infer_k_action_chunks_and_logprobs([policy_input, policy_input], k=5, temperature=1.0)
     end_time = time.time()
     timings.append(end_time - start_time)
     print(i)

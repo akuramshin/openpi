@@ -359,7 +359,7 @@ class Pi0FAST(_model.BaseModel):
             output_logits = jnp.zeros((last_logit.shape[0], max_decoding_steps, last_logit.shape[-1]), dtype=last_logit.dtype)
 
             def step(carry):
-                last_logit, output_tokens, output_logits, cache, _, step = carry
+                last_logit, output_tokens, output_logits, cache, _, step, rng = carry
 
                 # Store the logits for the current step
                 output_logits = jax.lax.dynamic_update_slice(
@@ -369,18 +369,14 @@ class Pi0FAST(_model.BaseModel):
                 )
                 # output_logits = output_logits.at[:, step, :].set(last_logit)
 
-                # Sample token from last logit
-                # if temperature > 0.0:
-                #     last_logit_temp = last_logit / temperature
-                #     token = jax.random.categorical(sequence_rng, last_logit_temp, axis=-1)
-                # else:
-                #     token = jnp.argmax(last_logit, axis=-1)
+                # Split the RNG key for this sampling operation
+                rng, sample_key = jax.random.split(rng)
 
                 # Replace if/else with jax.lax.cond
                 def sample_with_temp(operand):
-                    last_logit, sequence_rng = operand
+                    last_logit, sample_key = operand
                     last_logit_temp = last_logit / temperature
-                    return jax.random.categorical(sequence_rng, last_logit_temp, axis=-1)
+                    return jax.random.categorical(sample_key, last_logit_temp, axis=-1)
                     
                 def sample_greedy(operand):
                     last_logit, _ = operand
@@ -390,7 +386,7 @@ class Pi0FAST(_model.BaseModel):
                     temperature > 0.0,
                     sample_with_temp,
                     sample_greedy,
-                    (last_logit, sequence_rng)
+                    (last_logit, sample_key)
                 )
 
                 output_tokens = put_along_last_axis(output_tokens, jnp.broadcast_to(step, (token.shape[0], 1)), token)
@@ -411,15 +407,15 @@ class Pi0FAST(_model.BaseModel):
                     embedded_prefix=token_embedding, mask=mask, positions=positions, decode=True, kv_cache=cache
                 )
 
-                return last_logit, output_tokens, output_logits, kv_cache, all_eos, step + 1
+                return last_logit, output_tokens, output_logits, kv_cache, all_eos, step + 1, rng
 
             def cond(carry):
-                _, _, _, _, all_eos, step = carry
+                _, _, _, _, all_eos, step, _ = carry
                 return (~all_eos) & (step < max_decoding_steps)
 
             # Use lax.while_loop so we can jit the full decoding loop.
-            _, output_tokens, output_logits, _, _, _ = jax.lax.while_loop(
-                cond, step, (last_logit, output_tokens, output_logits, kv_cache, False, 0)
+            _, output_tokens, output_logits, _, _, _, _ = jax.lax.while_loop(
+                cond, step, (last_logit, output_tokens, output_logits, kv_cache, False, 0, sequence_rng)
             )
             
             return output_tokens, output_logits

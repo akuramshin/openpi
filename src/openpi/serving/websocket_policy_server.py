@@ -54,7 +54,7 @@ class WebsocketPolicyServer:
                 if isinstance(obs, list):
                     out = self._policy.infer_batch(obs)
                 elif isinstance(obs, dict) and 'k' in obs and 'temperature' in obs:
-                    out = self._policy.infer_k_action_chunks_and_logits(obs['obs'], obs['k'], obs['temperature'])
+                    out = self._policy.infer_k_action_chunks_and_logprobs(obs['obs'], obs['k'], obs['temperature'])
                 else:
                     out = self._policy.infer(obs)
 
