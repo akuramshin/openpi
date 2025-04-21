@@ -31,12 +31,18 @@ class Policy(BasePolicy):
         metadata: dict[str, Any] | None = None,
     ):
         self._sample_actions = nnx_utils.module_jit(model.sample_actions)
-        self._sample_k_action_chunks_and_logits = nnx_utils.module_jit(model.sample_k_action_chunks_and_logits) 
+        # self._sample_k_action_chunks_and_logits = nnx_utils.module_jit(model.sample_k_action_chunks_and_logits) 
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
         self._rng = rng or jax.random.key(0)
         self._sample_kwargs = sample_kwargs or {}
         self._metadata = metadata or {}
+
+        # check if the model has sample_k_action_chunks_and_logits
+        if not hasattr(model, "sample_k_action_chunks_and_logits"):
+            self._sample_k_action_chunks_and_logits = None
+        else:
+            self._sample_k_action_chunks_and_logits = nnx_utils.module_jit(model.sample_k_action_chunks_and_logits)
 
         self.build_probability_calculator()
 

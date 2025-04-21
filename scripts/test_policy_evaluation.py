@@ -5,8 +5,19 @@ from openpi.shared import download
 import pickle, time
 import copy
 
-config = config.get_config("pi0_fast_libero")
-checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_libero")
+# # Pi0Fast Libero
+# config = config.get_config("pi0_fast_libero")
+# checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_libero")
+
+# # Pi0Fast Base
+# config = config.get_config("pi0_fast_libero")
+# checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_base")
+
+# Pi0 Libero
+config = config.get_config("pi0_libero")
+checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_libero")
+
+# Pi0 Base
 
 # Create a trained policy.
 policy = policy_config.create_trained_policy(config, checkpoint_dir)
