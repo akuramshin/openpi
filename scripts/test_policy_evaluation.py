@@ -5,17 +5,19 @@ from openpi.shared import download
 import pickle, time
 import copy
 
-# # Pi0Fast Libero
-# config = config.get_config("pi0_fast_libero")
-# checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_libero")
+import numpy as np
+
+# Pi0Fast Libero
+config = config.get_config("pi0_fast_libero")
+checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_libero")
 
 # # Pi0Fast Base
 # config = config.get_config("pi0_fast_libero")
 # checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_base")
 
-# Pi0 Libero
-config = config.get_config("pi0_libero")
-checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_libero")
+# # Pi0 Libero
+# config = config.get_config("pi0_libero")
+# checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_libero")
 
 # Pi0 Base
 
@@ -27,18 +29,33 @@ with open('policy_input.pkl', 'rb') as f:
     policy_input = pickle.load(f)
 
 # Run once to jit compile
-# single_outputs = policy.infer(policy_input)
-batch_outputs = policy.infer_k_action_chunks_and_logprobs([policy_input], k=5, temperature=1.0)
+single_outputs = policy.infer(policy_input)
+batch_outputs = policy.infer_k_action_chunks_and_logprobs([policy_input], k=1, temperature=0.0)
 
-timings = []
+timings_default_inference = []
+timings_k_inference = []
+max_action_diff = []
 for i in range(10):
     start_time = time.time()
-    batch_outputs = policy.infer_k_action_chunks_and_logprobs([policy_input, policy_input], k=5, temperature=1.0)
+    single_outputs = policy.infer(policy_input)
     end_time = time.time()
-    timings.append(end_time - start_time)
+    timings_default_inference.append(end_time - start_time)
+
+    start_time = time.time()
+    batch_outputs = policy.infer_k_action_chunks_and_logprobs([policy_input], k=1, temperature=0.0)
+    end_time = time.time()
+    timings_k_inference.append(end_time - start_time)
     print(i)
 
-print(f"Average time: {sum(timings) / len(timings)}")
+    max_diff = np.max(np.abs(single_outputs['actions'] - batch_outputs['actions'][0,0,:,:]))
+    max_action_diff.append(max_diff)
+
+print(f"default timings: {timings_default_inference}")
+print(f"k timings: {timings_k_inference}")
+
+print(f"Average time for default inference: {sum(timings_default_inference) / len(timings_default_inference)}")
+print(f"Average time for k inference: {sum(timings_k_inference) / len(timings_k_inference)}")
+print(f"Max action difference: {max(max_action_diff)}")
 
 # k_list = [2, 5, 10, 20, 32]
 # for k in k_list:

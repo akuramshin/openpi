@@ -73,7 +73,8 @@ class Policy(BasePolicy):
             self, 
             observations: list[dict], 
             k: int = 1, 
-            temperature: float = 0.0, 
+            temperature: float = 0.0,
+            logprob_calc_temp = 1.0,
         ):
         """
         Run inference on a batch of observations.
@@ -118,7 +119,7 @@ class Policy(BasePolicy):
             batch_outputs.append(individual_outputs)
             
         # 5. Get the logprobs for the generated tokens
-        logprobs = self.get_probs_from_action_chunks_and_logits(tokens, logits, temperature)
+        logprobs = self.get_probs_from_action_chunks_and_logits(tokens, logits, logprob_calc_temp)
 
         batch_outputs = {
             'actions' : np.array(batch_outputs),
@@ -151,7 +152,7 @@ class Policy(BasePolicy):
         
         if temperature == 0.0:
             # Return probabilities of 1 for all selected tokens
-            chunk_logprobs = jnp.ones((batch_size, num_samples))
+            chunk_logprobs = jnp.zeros((batch_size, num_samples))
         else:
             logits = logits / temperature
             logprobs = jax.nn.log_softmax(logits, axis=-1)
