@@ -7,17 +7,17 @@ import copy
 
 import numpy as np
 
-# Pi0Fast Libero
-config = config.get_config("pi0_fast_libero")
-checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_libero")
+# # Pi0Fast Libero
+# config = config.get_config("pi0_fast_libero")
+# checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_libero")
 
 # # Pi0Fast Base
 # config = config.get_config("pi0_fast_libero")
 # checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_fast_base")
 
-# # Pi0 Libero
-# config = config.get_config("pi0_libero")
-# checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_libero")
+# Pi0 Libero
+config = config.get_config("pi0_libero")
+checkpoint_dir = download.maybe_download("s3://openpi-assets/checkpoints/pi0_libero")
 
 # Pi0 Base
 
@@ -30,7 +30,7 @@ with open('policy_input.pkl', 'rb') as f:
 
 # Run once to jit compile
 single_outputs = policy.infer(policy_input)
-batch_outputs = policy.infer_k_action_chunks_and_logprobs([policy_input], k=1, temperature=0.0)
+batch_outputs = policy.infer_k_action_chunks_and_logprobs([policy_input], k=5, temperature=1.0, logprob_calc_temp = 1.0)
 
 timings_default_inference = []
 timings_k_inference = []
