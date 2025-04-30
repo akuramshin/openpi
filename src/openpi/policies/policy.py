@@ -42,7 +42,7 @@ class Policy(BasePolicy):
         if not hasattr(model, "sample_k_action_chunks_and_logits"):
             self._sample_k_action_chunks_and_logits = None
         else:
-            self._sample_k_action_chunks_and_logits = model.sample_k_action_chunks_and_logits # nnx_utils.module_jit(model.sample_k_action_chunks_and_logits)
+            self._sample_k_action_chunks_and_logits = nnx_utils.module_jit(model.sample_k_action_chunks_and_logits)
 
         self.build_probability_calculator()
 
