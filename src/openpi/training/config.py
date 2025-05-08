@@ -244,17 +244,11 @@ class MixtureDataConfigFactory(DataConfigFactory):
                 f"Number of weights ({len(self.weights)}) must match number of data configs ({len(self.data_configs)})."
             )
 
-        # Create individual data configs
         configs = [config.create(assets_dirs, model_config) for config in self.data_configs]
 
-        # Use the first data config as the base config
-        base_config = configs[0]
-
-        # Add mixture metadata to the base config
         return dataclasses.replace(
-            base_config,
+            self.base_config or DataConfig(),
             repo_id=self.repo_id,
-            # Store the mixture information as additional fields
             mixture_configs=configs,
             mixture_weights=self.weights,
             mixture_stop_on_empty=self.stop_on_empty_dataset,
@@ -640,6 +634,37 @@ _CONFIGS = [
         ).get_freeze_filter(),
         # Turn off EMA for LoRA finetuning.
         ema_decay=None,
+    ),
+    TrainConfig(
+        name="pi0_fast_libero_mixture",
+        model=pi0_fast.Pi0FASTConfig(action_dim=7, action_horizon=10, max_token_len=180, paligemma_variant="gemma_2b_lora"),
+        data=MixtureDataConfigFactory(
+            data_configs=[
+                LeRobotLiberoDataConfig(
+                    repo_id="akuramshin/libero_10",
+                    base_config=DataConfig(
+                        local_files_only=True,
+                        prompt_from_task=True,
+                    ),
+                ),
+                LeRobotLiberoDataConfig(
+                    repo_id="akuramshin/libero_90",
+                    base_config=DataConfig(
+                        local_files_only=True,
+                        prompt_from_task=True,
+                    ),
+                ),
+            ],
+            weights=[1.0, 2.0],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
+        num_train_steps=30_000,
+         freeze_filter=pi0_fast.Pi0FASTConfig(
+            action_dim=7, action_horizon=10, max_token_len=180, paligemma_variant="gemma_2b_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+        wandb_enabled=False,
     ),
     #
     # Fine-tuning Aloha configs.
