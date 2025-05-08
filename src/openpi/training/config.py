@@ -90,6 +90,27 @@ class DataConfig:
     # If true, will disable syncing the dataset from the Hugging Face Hub. Allows training on local-only datasets.
     local_files_only: bool = False
 
+    mixture_configs: Sequence["DataConfig"] | None = None
+    mixture_weights: Sequence[float] | None = None
+    mixture_stop_on_empty: bool = False
+
+    def __post_init__(self):
+        if self.mixture_configs is None:
+            object.__setattr__(self, "mixture_configs", ())
+        else:
+            object.__setattr__(self, "mixture_configs", tuple(self.mixture_configs))
+
+        if self.mixture_weights is None:
+            object.__setattr__(self, "mixture_weights", ())
+        else:
+            object.__setattr__(self, "mixture_weights", tuple(self.mixture_weights))
+
+        if self.mixture_configs and self.mixture_weights and len(self.mixture_configs) != len(self.mixture_weights):
+            raise ValueError(
+                f"Length of mixture_configs ({len(self.mixture_configs)}) does not match "
+                f"length of mixture_weights ({len(self.mixture_weights)})."
+            )
+
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -193,6 +214,50 @@ class SimpleDataConfig(DataConfigFactory):
             data_transforms=self.data_transforms(model_config),
             model_transforms=self.model_transforms(model_config),
             use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class MixtureDataConfigFactory(DataConfigFactory):
+    """Factory for creating a data config that samples from multiple datasets with weighted probabilities."""
+
+    # Override the repo_id field to make it optional since we'll have multiple datasets
+    repo_id: str = "mixture"
+
+    # List of data config factories for the datasets we want to mix
+    data_configs: Sequence[DataConfigFactory] = dataclasses.field(default_factory=list)
+
+    # Weights for each dataset (will be normalized)
+    weights: Sequence[float] = None
+
+    # Whether to stop sampling when any dataset is exhausted
+    stop_on_empty_dataset: bool = False
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        """Create a data config for mixing multiple datasets."""
+        if not self.data_configs:
+            raise ValueError("At least one data config must be provided.")
+
+        if self.weights is not None and len(self.weights) != len(self.data_configs):
+            raise ValueError(
+                f"Number of weights ({len(self.weights)}) must match number of data configs ({len(self.data_configs)})."
+            )
+
+        # Create individual data configs
+        configs = [config.create(assets_dirs, model_config) for config in self.data_configs]
+
+        # Use the first data config as the base config
+        base_config = configs[0]
+
+        # Add mixture metadata to the base config
+        return dataclasses.replace(
+            base_config,
+            repo_id=self.repo_id,
+            # Store the mixture information as additional fields
+            mixture_configs=configs,
+            mixture_weights=self.weights,
+            mixture_stop_on_empty=self.stop_on_empty_dataset,
         )
 
 
@@ -647,6 +712,28 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("./checkpoints/debug/debug/9/params"),
         overwrite=True,
         exp_name="debug",
+        num_train_steps=10,
+        wandb_enabled=False,
+    ),
+    TrainConfig(
+        name="debug_mixture",
+        model=pi0.Pi0Config(paligemma_variant="dummy", action_expert_variant="dummy"),
+        data=MixtureDataConfigFactory(
+            data_configs=[
+                LeRobotAlohaDataConfig(
+                    repo_id="lerobot/aloha_sim_transfer_cube_human",
+                    default_prompt="Transfer cube",
+                    use_delta_joint_actions=False,
+                ),
+                LeRobotAlohaDataConfig(
+                    repo_id="lerobot/aloha_sim_transfer_cube_human",
+                    default_prompt="Transfer cube",
+                    use_delta_joint_actions=False,
+                ),
+            ],
+            weights=[0.5, 0.5],
+        ),
+        batch_size=2,
         num_train_steps=10,
         wandb_enabled=False,
     ),
