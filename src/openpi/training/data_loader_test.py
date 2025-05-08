@@ -1,6 +1,7 @@
 import dataclasses
 
 import jax
+import pytest
 
 from openpi.models import pi0
 from openpi.training import config as _config
@@ -82,3 +83,126 @@ def test_with_real_dataset():
 
     for _, actions in batches:
         assert actions.shape == (config.batch_size, config.model.action_horizon, config.model.action_dim)
+
+
+class TaggedDataset(_data_loader.FakeDataset):
+    def __init__(self, model_config, num_samples, tag):
+        super().__init__(model_config, num_samples)
+        self.tag = tag
+
+    def __getitem__(self, index):
+        data = super().__getitem__(index)
+        data["tag"] = self.tag
+        return data
+
+
+def test_dataset_mixture():
+    config = _config.get_config("debug_mixture")
+
+    loader = _data_loader.create_data_loader(config, skip_norm_stats=True, num_batches=2)
+
+    assert loader.data_config().repo_id == config.data.repo_id
+
+    batches = list(loader)
+
+    assert len(batches) == 2
+
+    for batch in batches:
+        assert all(x.shape[0] == config.batch_size for x in jax.tree.leaves(batch))
+
+    for _, actions in batches:
+        assert actions.shape == (config.batch_size, config.model.action_horizon, config.model.action_dim)
+
+
+def test_dataset_mixture_init():
+    """Test basic initialization of WeightedSampleFromDatasets."""
+    config = pi0.Pi0Config(paligemma_variant="dummy", action_expert_variant="dummy")
+    dataset1 = _data_loader.FakeDataset(config, 20)
+    dataset2 = _data_loader.FakeDataset(config, 30)
+
+    mixture1 = _data_loader.MixtureDataset([dataset1, dataset2], seed=42, weights=[0.5, 0.5])
+    mixture2 = _data_loader.MixtureDataset([dataset1, dataset2], seed=42, weights=[0.5, 0.5])
+
+    assert mixture1._sampling_order == mixture2._sampling_order
+
+    mixture1 = _data_loader.MixtureDataset([dataset1, dataset2], seed=42, weights=[0.6, 0.4])
+    mixture2 = _data_loader.MixtureDataset([dataset1, dataset2], seed=42, weights=[0.4, 0.6])
+
+    assert mixture1._sampling_order != mixture2._sampling_order
+
+
+def test_weighted_sample_dataset_item_access():
+    """Test that items can be accessed from the dataset and are from the correct source."""
+    config = pi0.Pi0Config(paligemma_variant="dummy", action_expert_variant="dummy")
+
+    dataset1 = TaggedDataset(config, 20, "dataset1")
+    dataset2 = TaggedDataset(config, 30, "dataset2")
+
+    # Create mixture with equal weights
+    mixture = _data_loader.MixtureDataset([dataset1, dataset2], weights=[0.5, 0.5], seed=42)
+
+    # Count items from each dataset to verify distribution
+    sources = [mixture[i]["tag"] for i in range(len(mixture))]
+    dataset1_count = sources.count("dataset1")
+    dataset2_count = sources.count("dataset2")
+
+    # Since datasets are 20 and 30 items, and weights are equal,
+    # we should get all 20 from dataset1 and 30 from dataset2
+    assert dataset1_count == 20
+    assert dataset2_count == 30
+    assert dataset1_count + dataset2_count == len(mixture)
+
+
+def test_weighted_sample_dataset_edge_cases():
+    """Test edge cases like single dataset, empty dataset, etc."""
+    config = pi0.Pi0Config(paligemma_variant="dummy", action_expert_variant="dummy")
+
+    # Single dataset
+    single_dataset = _data_loader.FakeDataset(config, 20)
+    mixture = _data_loader.WeightedSampleFromDatasets([single_dataset])
+    assert len(mixture) == 20
+
+    # Empty datasets should be skipped
+    empty_dataset = _data_loader.FakeDataset(config, 0)
+    normal_dataset = _data_loader.FakeDataset(config, 20)
+
+    # This should work fine - empty dataset gets skipped
+    mixture = _data_loader.MixtureDataset([empty_dataset, normal_dataset], weights=[0.3, 0.7])
+    assert len(mixture) == 20
+
+    # With stop_on_empty_dataset=True and one empty dataset, length should be 0
+    mixture = _data_loader.MixtureDataset(
+        [empty_dataset, normal_dataset], weights=[0.3, 0.7], stop_on_empty_dataset=True
+    )
+    assert len(mixture) == 0
+
+    with pytest.warns(UserWarning):
+        mixture = _data_loader.MixtureDataset([normal_dataset, normal_dataset], weights=[0.0, 0.0])
+        # Should fall back to uniform weights
+        assert len(mixture) == 40
+
+
+def test_weighted_sampling_distribution():
+    """Test that sampling follows the specified weights."""
+    config = pi0.Pi0Config(paligemma_variant="dummy", action_expert_variant="dummy")
+
+    dataset1 = TaggedDataset(config, 1000, "dataset1")
+    dataset2 = TaggedDataset(config, 1000, "dataset2")
+
+    weights = [0.8, 0.2]
+    mixture = _data_loader.MixtureDataset(
+        [dataset1, dataset2],
+        weights=weights,
+        stop_on_empty_dataset=True,  # To get exact count
+        seed=42,
+    )
+
+    samples = [mixture[i]["tag"] for i in range(500)]
+    dataset1_count = samples.count("dataset1")
+    dataset2_count = samples.count("dataset2")
+
+    # Allow some statistical variance (within ±5%)
+    expected_dataset1 = 500 * 0.8
+    expected_dataset2 = 500 * 0.2
+    assert abs(dataset1_count - expected_dataset1) < 50
+    assert abs(dataset2_count - expected_dataset2) < 50
