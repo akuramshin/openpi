@@ -84,7 +84,7 @@ class FakeDataset(Dataset):
 class MixtureDataset(Dataset[T_co]):
     """Dataset that samples from multiple datasets with weights similar to TensorFlow's sample_from_datasets.
 
-    For each element, a dataset is selected based on weights, and the next unused element
+    For each element, a dataset is selected based on weight[i], and the next unused element
     from that dataset is returned. Sampling is done without replacement.
     """
 
@@ -92,6 +92,7 @@ class MixtureDataset(Dataset[T_co]):
         self,
         datasets: Sequence[Dataset],
         weights: Sequence[float] | None = None,
+        *,
         stop_on_empty_dataset: bool = False,
         seed: int | None = None,
     ):
@@ -124,7 +125,7 @@ class MixtureDataset(Dataset[T_co]):
         self._sampling_order = self._calculate_sampling_order()
 
     def _calculate_sampling_order(self):
-        """Calculate the sampling order for this dataset."""
+        """Calculate the sampling order for this dataset mixture."""
         remaining_indices = [list(range(len(dataset))) for dataset in self._datasets]
         active_datasets = list(range(len(self._datasets)))
         weights = self._weights.copy()
