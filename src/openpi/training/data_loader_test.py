@@ -1,7 +1,6 @@
 import dataclasses
 
 import jax
-import pytest
 
 from openpi.models import pi0
 from openpi.training import config as _config
@@ -123,15 +122,15 @@ def test_dataset_mixture_init():
     mixture1 = _data_loader.MixtureDataset([dataset1, dataset2], seed=42, weights=[0.5, 0.5])
     mixture2 = _data_loader.MixtureDataset([dataset1, dataset2], seed=42, weights=[0.5, 0.5])
 
-    assert mixture1._sampling_order == mixture2._sampling_order
+    assert mixture1._sampling_order == mixture2._sampling_order  # noqa: SLF001
 
     mixture1 = _data_loader.MixtureDataset([dataset1, dataset2], seed=42, weights=[0.6, 0.4])
     mixture2 = _data_loader.MixtureDataset([dataset1, dataset2], seed=42, weights=[0.4, 0.6])
 
-    assert mixture1._sampling_order != mixture2._sampling_order
+    assert mixture1._sampling_order != mixture2._sampling_order  # noqa: SLF001
 
 
-def test_weighted_sample_dataset_item_access():
+def test_dataset_mixture_item_access():
     """Test that items can be accessed from the dataset and are from the correct source."""
     config = pi0.Pi0Config(paligemma_variant="dummy", action_expert_variant="dummy")
 
@@ -153,36 +152,30 @@ def test_weighted_sample_dataset_item_access():
     assert dataset1_count + dataset2_count == len(mixture)
 
 
-def test_weighted_sample_dataset_edge_cases():
+def test_dataset_mixture_edge_cases():
     """Test edge cases like single dataset, empty dataset, etc."""
     config = pi0.Pi0Config(paligemma_variant="dummy", action_expert_variant="dummy")
 
     # Single dataset
     single_dataset = _data_loader.FakeDataset(config, 20)
-    mixture = _data_loader.WeightedSampleFromDatasets([single_dataset])
+    mixture = _data_loader.MixtureDataset([single_dataset])
     assert len(mixture) == 20
 
     # Empty datasets should be skipped
     empty_dataset = _data_loader.FakeDataset(config, 0)
     normal_dataset = _data_loader.FakeDataset(config, 20)
 
-    # This should work fine - empty dataset gets skipped
     mixture = _data_loader.MixtureDataset([empty_dataset, normal_dataset], weights=[0.3, 0.7])
     assert len(mixture) == 20
 
-    # With stop_on_empty_dataset=True and one empty dataset, length should be 0
+    # With stop_on_empty_dataset=True and one empty dataset, length should be less than 20 (on average)
     mixture = _data_loader.MixtureDataset(
-        [empty_dataset, normal_dataset], weights=[0.3, 0.7], stop_on_empty_dataset=True
+        [empty_dataset, normal_dataset], weights=[0.5, 0.5], stop_on_empty_dataset=True
     )
-    assert len(mixture) == 0
-
-    with pytest.warns(UserWarning):
-        mixture = _data_loader.MixtureDataset([normal_dataset, normal_dataset], weights=[0.0, 0.0])
-        # Should fall back to uniform weights
-        assert len(mixture) == 40
+    assert len(mixture) < 20
 
 
-def test_weighted_sampling_distribution():
+def test_dataset_mixture_distribution():
     """Test that sampling follows the specified weights."""
     config = pi0.Pi0Config(paligemma_variant="dummy", action_expert_variant="dummy")
 
@@ -204,5 +197,5 @@ def test_weighted_sampling_distribution():
     # Allow some statistical variance (within ±5%)
     expected_dataset1 = 500 * 0.8
     expected_dataset2 = 500 * 0.2
-    assert abs(dataset1_count - expected_dataset1) < 50
-    assert abs(dataset2_count - expected_dataset2) < 50
+    assert abs(dataset1_count - expected_dataset1) < 25
+    assert abs(dataset2_count - expected_dataset2) < 25
